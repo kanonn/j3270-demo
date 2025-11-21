@@ -5,7 +5,7 @@ import java.text.SimpleDateFormat;
 import java.util.Date;
 
 /**
- * TK4- MVS TSO 自动化程序 (修正版)
+ * TK4- MVS TSO 自动化程序 (可配置版)
  */
 public class TN3270Demo {
 
@@ -27,25 +27,41 @@ public class TN3270Demo {
     private static final int ROW_OFFSET = -1;
     private static final int COL_OFFSET = -1;
 
-    // ⭐⭐⭐ 密码字段固定位置(根据手动测试成功的坐标) ⭐⭐⭐
+    // ⭐ 密码字段固定位置
     private static final int PASSWORD_ROW = 1;
     private static final int PASSWORD_COL = 24;
 
-    private boolean debugMode = false;
+    // ⭐⭐⭐ 控制变量 ⭐⭐⭐
+    private boolean debugMode = false;           // 是否开启调试模式
+    private boolean onlyShowScreenChanges = false;  // true=只显示变化的屏幕, false=显示所有屏幕
+
     private Process ws3270Process;
     private BufferedWriter logWriter;
     private int commandCounter = 0;
+    private int screenDumpCounter = 0;
+    private String lastScreen = "";  // 用于检测屏幕变化
 
     public TN3270Demo() {
-        this(false);
+        this(false, false);
     }
 
     public TN3270Demo(boolean debugMode) {
+        this(debugMode, false);
+    }
+
+    /**
+     * @param debugMode 是否开启调试模式
+     * @param onlyShowScreenChanges true=只显示变化的屏幕, false=显示所有屏幕
+     */
+    public TN3270Demo(boolean debugMode, boolean onlyShowScreenChanges) {
         this.debugMode = debugMode;
+        this.onlyShowScreenChanges = onlyShowScreenChanges;
         try {
             logWriter = new BufferedWriter(new FileWriter(LOG_FILE, false));
             log("==============================================================");
-            log("调试模式: " + (debugMode ? "开启" : "关闭"));
+            log("配置:");
+            log("  调试模式: " + (debugMode ? "开启" : "关闭"));
+            log("  屏幕显示: " + (onlyShowScreenChanges ? "仅显示变化" : "显示所有"));
             log("==============================================================");
             log("");
         } catch (IOException e) {
@@ -69,11 +85,13 @@ public class TN3270Demo {
         }
     }
 
-    private String executeX3270if(String command) {
-        return executeX3270if(command, true);
-    }
-
-    private String executeX3270if(String command, boolean autoDebug) {
+    /**
+     * ⭐⭐⭐ 执行x3270if命令 (增强版) ⭐⭐⭐
+     * @param command 要执行的命令
+     * @param showScreen 是否在命令后显示屏幕
+     * @return 命令输出
+     */
+    private String executeX3270if(String command, boolean showScreen) {
         commandCounter++;
 
         try {
@@ -97,9 +115,17 @@ public class TN3270Demo {
                         (result.length() > 100 ? result.substring(0, 100) + "..." : result));
             }
 
-            if (debugMode && autoDebug && !command.startsWith("Ascii") && !command.startsWith("Query")) {
-                Thread.sleep(300);
-                dumpScreen("执行 [" + command + "] 后");
+            // ⭐ 根据参数决定是否显示屏幕
+            if (debugMode && showScreen && !command.startsWith("Ascii") && !command.startsWith("Query")) {
+                Thread.sleep(500);
+
+                if (onlyShowScreenChanges) {
+                    // 只显示变化的屏幕
+                    dumpScreenIfChanged("执行 [" + command + "] 后");
+                } else {
+                    // 显示所有屏幕
+                    dumpScreen("执行 [" + command + "] 后");
+                }
             }
 
             return result;
@@ -110,39 +136,132 @@ public class TN3270Demo {
         }
     }
 
+    /**
+     * 兼容旧代码的方法 - 默认显示屏幕
+     */
+    private String executeX3270if(String command) {
+        return executeX3270if(command, true);
+    }
+
+    /**
+     * ⭐ 总是显示屏幕快照
+     */
     private void dumpScreen(String title) {
         try {
+            screenDumpCounter++;
             String screen = executeX3270if("Ascii", false);
 
             log("");
             log("┌─────────────────────────────────────────────────────────────┐");
-            log("│ 屏幕快照: " + title);
+            log("│ 屏幕快照 #" + screenDumpCounter + ": " + title);
             log("├─────────────────────────────────────────────────────────────┤");
 
             String[] lines = screen.split("\n");
-            for (int i = 0; i < lines.length; i++) {
-                String line = lines[i];
-                if (line.length() < 80) {
-                    line = line + " ".repeat(80 - line.length());
+
+            if (lines.length == 0 || screen.trim().isEmpty()) {
+                log("│   (屏幕为空)");
+            } else {
+                for (int i = 0; i < lines.length; i++) {
+                    String line = lines[i];
+                    if (line.length() < 80) {
+                        line = line + " ".repeat(80 - line.length());
+                    }
+                    log(String.format("│%2d│ %s", i + 1, line.substring(0, Math.min(80, line.length()))));
                 }
-                log(String.format("│%2d│ %s", i + 1, line.substring(0, Math.min(80, line.length()))));
             }
 
             log("└─────────────────────────────────────────────────────────────┘");
             log("");
+
+            lastScreen = screen;  // 更新最后屏幕内容
 
         } catch (Exception e) {
             log("!!! 无法读取屏幕: " + e.getMessage());
         }
     }
 
-    public void showScreen(String title) {
-        dumpScreen(title);
+    /**
+     * ⭐ 只在屏幕有变化时才显示
+     */
+    private void dumpScreenIfChanged(String title) {
+        try {
+            String screen = executeX3270if("Ascii", false);
+
+            if (!screen.equals(lastScreen)) {
+                screenDumpCounter++;
+
+                log("");
+                log("┌─────────────────────────────────────────────────────────────┐");
+                log("│ 屏幕快照 #" + screenDumpCounter + ": " + title + " (有变化)");
+                log("├─────────────────────────────────────────────────────────────┤");
+
+                String[] lines = screen.split("\n");
+
+                if (lines.length == 0 || screen.trim().isEmpty()) {
+                    log("│   (屏幕为空)");
+                } else {
+                    for (int i = 0; i < lines.length; i++) {
+                        String line = lines[i];
+                        if (line.length() < 80) {
+                            line = line + " ".repeat(80 - line.length());
+                        }
+                        log(String.format("│%2d│ %s", i + 1, line.substring(0, Math.min(80, line.length()))));
+                    }
+                }
+
+                log("└─────────────────────────────────────────────────────────────┘");
+                log("");
+
+                lastScreen = screen;
+            } else {
+                log("  (屏幕无变化,跳过输出)");
+            }
+
+        } catch (Exception e) {
+            log("!!! 无法读取屏幕: " + e.getMessage());
+        }
     }
 
-    /**
-     * 查找Logon字段位置
-     */
+    private String getCursorPosition() {
+        String cursor = executeX3270if("Query(Cursor)", false);
+        log("  当前光标位置: " + cursor);
+        return cursor;
+    }
+
+    private void sendEnter(int waitSeconds) {
+        try {
+            log("  发送Enter命令");
+            executeX3270if("Enter", true);  // ⭐ 明确指定显示屏幕
+            log("  等待 " + waitSeconds + " 秒...");
+            Thread.sleep(waitSeconds * 1000);
+        } catch (InterruptedException e) {
+            log("  等待被中断: " + e.getMessage());
+        }
+    }
+
+    private void tabAndInput(String input, int waitSeconds) {
+        try {
+            log("  Reset解锁键盘");
+            executeX3270if("Reset", false);  // ⭐ Reset不显示屏幕
+            Thread.sleep(300);
+
+            log("  使用Tab定位到输入字段");
+            executeX3270if("Tab", false);  // ⭐ Tab不显示屏幕
+            Thread.sleep(300);
+
+            getCursorPosition();
+
+            log("  输入: " + input);
+            executeX3270if("String(\"" + input + "\")", false);  // ⭐ 输入不显示屏幕
+            Thread.sleep(300);
+
+            sendEnter(waitSeconds);  // Enter会显示屏幕
+
+        } catch (InterruptedException e) {
+            log("  输入失败: " + e.getMessage());
+        }
+    }
+
     private int[] findLogonField(String screenContent) {
         String[] lines = screenContent.split("\n");
 
@@ -171,10 +290,7 @@ public class TN3270Demo {
                     int finalCol = (inputCol + 1) + COL_OFFSET;
 
                     log("  ✓ 找到Logon字段:");
-                    log("    数组索引: row=" + row + ", arrowPos=" + arrowPos + ", inputCol=" + inputCol);
-                    log("    原始坐标: 行=" + (row + 1) + ", 列=" + (inputCol + 1));
                     log("    校准后坐标: 行=" + finalRow + ", 列=" + finalCol);
-                    log("    行内容: " + line);
 
                     return new int[]{finalRow, finalCol};
                 }
@@ -183,53 +299,6 @@ public class TN3270Demo {
 
         log("  ✗ 未找到Logon字段");
         return null;
-    }
-
-    /**
-     * 分析密码字段位置(仅用于调试)
-     */
-    private void analyzePasswordField(String screenContent) {
-        String[] lines = screenContent.split("\n");
-
-        log("  分析密码字段位置:");
-        log("  ================");
-
-        for (int row = 0; row < lines.length; row++) {
-            String line = lines[row];
-            String upperLine = line.toUpperCase();
-
-            if (upperLine.contains("PASSWORD")) {
-                log("  第" + (row + 1) + "行包含PASSWORD:");
-                log("    原始内容: [" + line + "]");
-                log("    长度: " + line.length());
-
-                // 显示每个字符的位置
-                log("    字符位置分析:");
-                for (int i = 0; i < Math.min(line.length(), 50); i++) {
-                    char c = line.charAt(i);
-                    if (c != ' ') {
-                        log("      位置" + i + "(x3270=" + (i+1) + "): '" + c + "'");
-                    }
-                }
-
-                // 查找 "-" 的位置
-                int dashPos = line.lastIndexOf("-");
-                if (dashPos >= 0) {
-                    log("    '-' 的位置: 数组索引=" + dashPos + ", x3270坐标=" + (dashPos + 1));
-                    log("    '-' 后一位: 数组索引=" + (dashPos + 1) + ", x3270坐标=" + (dashPos + 2));
-                }
-
-                log("  根据手动测试成功的坐标:");
-                log("    成功位置: 行=1, 列=24");
-                log("    对应数组: row=0, col=23");
-
-                // 检查第23列是什么
-                if (line.length() > 23) {
-                    log("    第23列(数组索引22)的字符: '" + line.charAt(22) + "'");
-                    log("    第24列(数组索引23)的字符: '" + line.charAt(23) + "'");
-                }
-            }
-        }
     }
 
     public boolean connect() {
@@ -281,8 +350,11 @@ public class TN3270Demo {
             // 2. 连接到TK4-
             log("[2] 连接到TK4-");
             log("--------------------------------------------------------------");
+            log("  目标: " + HOST + ":" + PORT);
 
-            executeX3270if("Connect(" + HOST + ":" + PORT + ")");
+            executeX3270if("Connect(" + HOST + ":" + PORT + ")", true);
+
+            log("  等待连接建立...");
             Thread.sleep(3000);
 
             String connState = executeX3270if("Query(ConnectionState)", false);
@@ -292,30 +364,49 @@ public class TN3270Demo {
                 log("  ✗ 连接失败");
                 return false;
             }
+            log("  ✓ 已连接");
 
-            // 3. 进入TSO登录
-            log("\n[3] 进入TSO登录界面");
+            // 3. 读取初始屏幕并检查LOGON
+            log("\n[3] 检查登录屏幕");
             log("--------------------------------------------------------------");
 
-            executeX3270if("Clear");
-            Thread.sleep(3000);
+            dumpScreen("连接后的初始屏幕");
 
             String screenContent = executeX3270if("Ascii", false);
 
+            // 如果没有LOGON,执行Clear和Reset
             if (!screenContent.toUpperCase().contains("LOGON")) {
-                log("  ✗ 未检测到TSO登录屏幕");
-                return false;
+                log("  未检测到LOGON字段,执行Clear和Reset");
+                log("");
+
+                log("  执行Clear:");
+                executeX3270if("Clear", true);
+                Thread.sleep(2000);
+
+                log("  执行Reset:");
+                executeX3270if("Reset", true);
+                Thread.sleep(2000);
+
+                // 再次检查
+                screenContent = executeX3270if("Ascii", false);
+
+                if (!screenContent.toUpperCase().contains("LOGON")) {
+                    log("  ⚠ 仍未检测到LOGON字段");
+                    log("  ⚠ 但继续尝试登录流程");
+                } else {
+                    log("  ✓ Clear和Reset后检测到LOGON字段");
+                }
+            } else {
+                log("  ✓ 已检测到LOGON字段");
             }
 
-            log("  ✓ TSO登录屏幕就绪");
-
-            if (debugMode) {
-                dumpScreen("TSO登录屏幕");
-            }
+            log("");
+            log("✓ 连接成功!");
 
             return true;
 
         } catch (Exception e) {
+            log("");
             log("✗ 连接失败: " + e.getMessage());
             e.printStackTrace();
             return false;
@@ -332,7 +423,7 @@ public class TN3270Demo {
             // 1. Reset键盘
             log("\n[1] Reset解锁键盘");
             log("--------------------------------------------------------------");
-            executeX3270if("Reset");
+            executeX3270if("Reset", true);
             Thread.sleep(500);
 
             // 2. 读取并查找Logon字段
@@ -353,10 +444,10 @@ public class TN3270Demo {
             log("  用户名: " + username);
             log("  位置: 行=" + userPos[0] + ", 列=" + userPos[1]);
 
-            executeX3270if("MoveCursor(" + userPos[0] + "," + userPos[1] + ")");
+            executeX3270if("MoveCursor(" + userPos[0] + "," + userPos[1] + ")", false);
             Thread.sleep(300);
 
-            executeX3270if("String(\"" + username + "\")");
+            executeX3270if("String(\"" + username + "\")", true);  // ⭐ 输入用户名后显示
             log("  ✓ 用户名已输入");
             Thread.sleep(500);
 
@@ -364,58 +455,43 @@ public class TN3270Demo {
             log("\n[4] 提交用户名");
             log("--------------------------------------------------------------");
 
-            executeX3270if("Enter");
+            executeX3270if("Enter", true);  // ⭐ Enter后显示
             log("  等待密码提示...");
             Thread.sleep(5000);
 
-            // 5. 读取密码屏幕并分析
-            log("\n[5] 分析密码提示屏幕");
-            log("--------------------------------------------------------------");
-
+            // 5. 输入密码
             String passwordScreen = executeX3270if("Ascii", false);
 
-            if (debugMode) {
-                dumpScreen("密码提示屏幕");
-            }
-
-            // ⭐ 分析密码字段位置
-            analyzePasswordField(passwordScreen);
-
-            // 6. 输入密码(使用固定位置)
             if (passwordScreen.toUpperCase().contains("PASSWORD")) {
-                log("\n[6] 输入密码(使用固定位置)");
+                log("\n[5] 输入密码");
                 log("--------------------------------------------------------------");
 
-                executeX3270if("Reset");
+                executeX3270if("Reset", false);
                 Thread.sleep(500);
 
                 log("  密码: ******");
-                log("  ⭐ 使用固定位置: 行=" + PASSWORD_ROW + ", 列=" + PASSWORD_COL);
+                log("  使用固定位置: 行=" + PASSWORD_ROW + ", 列=" + PASSWORD_COL);
 
-                executeX3270if("MoveCursor(" + PASSWORD_ROW + "," + PASSWORD_COL + ")");
+                executeX3270if("MoveCursor(" + PASSWORD_ROW + "," + PASSWORD_COL + ")", false);
                 Thread.sleep(300);
 
-                executeX3270if("String(\"" + password + "\")");
+                executeX3270if("String(\"" + password + "\")", true);  // ⭐ 输入密码后显示
                 log("  ✓ 密码已输入");
                 Thread.sleep(500);
 
-                log("\n[7] 提交密码");
+                log("\n[6] 提交密码");
                 log("--------------------------------------------------------------");
 
-                executeX3270if("Enter");
+                executeX3270if("Enter", true);  // ⭐ Enter后显示
                 log("  等待登录完成...");
                 Thread.sleep(5000);
             }
 
-            // 8. 验证登录结果
-            log("\n[8] 验证登录结果");
+            // 6. 验证登录结果
+            log("\n[7] 验证登录结果");
             log("--------------------------------------------------------------");
 
             String finalScreen = executeX3270if("Ascii", false);
-
-            if (debugMode) {
-                dumpScreen("登录后的屏幕");
-            }
 
             if (finalScreen.toUpperCase().contains("WELCOME") ||
                     finalScreen.toUpperCase().contains("OPTION") ||
@@ -426,14 +502,54 @@ public class TN3270Demo {
                 log("  ✗ 登录失败: 检测到INVALID错误");
                 return false;
             } else {
-                log("  ⚠ 登录状态不明确");
+                log("  ⚠ 登录状态不明确,继续执行");
                 return true;
             }
 
         } catch (Exception e) {
+            log("");
             log("✗ 登录失败: " + e.getMessage());
             e.printStackTrace();
             return false;
+        }
+    }
+
+    public void performTSOOperations() {
+        try {
+            log("");
+            log("==============================================================");
+            log("开始TSO操作");
+            log("==============================================================");
+
+            // 步骤1: 发送2次Enter
+            log("\n[步骤1] 发送2次Enter");
+            log("--------------------------------------------------------------");
+
+            log("  第1次Enter:");
+            sendEnter(1);
+
+            log("  第2次Enter:");
+            sendEnter(1);
+
+            // 步骤2: 输入2并Enter
+            log("\n[步骤2] 输入2进入菜单");
+            log("--------------------------------------------------------------");
+
+            tabAndInput("2", 1);
+
+            // 步骤3: 输入X并Enter
+            log("\n[步骤3] 输入X退出");
+            log("--------------------------------------------------------------");
+
+            tabAndInput("X", 1);
+
+            log("");
+            log("✓ TSO操作完成!");
+
+        } catch (Exception e) {
+            log("");
+            log("✗ TSO操作失败: " + e.getMessage());
+            e.printStackTrace();
         }
     }
 
@@ -444,71 +560,61 @@ public class TN3270Demo {
             log("开始登出流程");
             log("==============================================================");
 
-            String currentScreen = executeX3270if("Ascii", false);
+            dumpScreen("登出前的屏幕");
 
-            if (debugMode) {
-                dumpScreen("登出前的屏幕");
-            }
+            String currentScreen = executeX3270if("Ascii", false);
 
             // 从应用菜单退出
             if (currentScreen.toUpperCase().contains("OPTION")) {
                 log("\n[1] 从应用菜单退出");
                 log("--------------------------------------------------------------");
 
-                executeX3270if("Reset");
+                executeX3270if("Reset", false);
                 Thread.sleep(500);
 
-                executeX3270if("Tab");
+                executeX3270if("Tab", false);
                 Thread.sleep(300);
 
-                executeX3270if("String(\"X\")");
+                getCursorPosition();
+
+                executeX3270if("String(\"X\")", false);
                 Thread.sleep(300);
 
-                executeX3270if("Enter");
+                executeX3270if("Enter", true);  // ⭐ Enter后显示
                 Thread.sleep(3000);
-
-                if (debugMode) {
-                    dumpScreen("退出应用菜单后");
-                }
             }
 
             // 发送LOGOFF
             log("\n[2] 发送LOGOFF");
             log("--------------------------------------------------------------");
 
-            executeX3270if("Reset");
+            executeX3270if("Reset", false);
             Thread.sleep(500);
 
-            executeX3270if("String(\"LOGOFF\")");
+            executeX3270if("String(\"LOGOFF\")", false);
             Thread.sleep(300);
 
-            executeX3270if("Enter");
+            executeX3270if("Enter", true);  // ⭐ Enter后显示
             Thread.sleep(5000);
-
-            if (debugMode) {
-                dumpScreen("LOGOFF后");
-            }
 
             // 断开连接
             log("\n[3] 断开连接");
             log("--------------------------------------------------------------");
 
-            executeX3270if("Disconnect");
+            executeX3270if("Disconnect", false);
             Thread.sleep(1000);
 
             log("  ✓ 登出完成");
             return true;
 
         } catch (Exception e) {
+            log("");
             log("✗ 登出失败: " + e.getMessage());
             e.printStackTrace();
             return false;
         }
     }
 
-    /**
-     * ⭐⭐⭐ 改进的关闭方法 ⭐⭐⭐
-     */
     public void disconnect() {
         log("");
         log("==============================================================");
@@ -516,12 +622,10 @@ public class TN3270Demo {
         log("==============================================================");
 
         try {
-            // 方法1: 尝试正常关闭
             if (ws3270Process != null && ws3270Process.isAlive()) {
                 log("  尝试正常终止进程...");
                 ws3270Process.destroy();
 
-                // 等待最多3秒
                 boolean exited = ws3270Process.waitFor(3, java.util.concurrent.TimeUnit.SECONDS);
 
                 if (exited) {
@@ -533,7 +637,6 @@ public class TN3270Demo {
                 }
             }
 
-            // 方法2: 使用taskkill确保清理
             log("  使用taskkill清理ws3270进程...");
 
             ProcessBuilder pb = new ProcessBuilder("taskkill", "/F", "/IM", "ws3270.exe");
@@ -549,7 +652,6 @@ public class TN3270Demo {
 
             killProc.waitFor();
 
-            // 同时清理ws3270_real.exe
             log("  清理ws3270_real.exe进程...");
 
             pb = new ProcessBuilder("taskkill", "/F", "/IM", "ws3270_real.exe");
@@ -573,6 +675,7 @@ public class TN3270Demo {
                 try {
                     log("");
                     log("总命令数: " + commandCounter);
+                    log("总屏幕快照数: " + screenDumpCounter);
                     log("结束时间: " + new SimpleDateFormat("yyyy-MM-dd HH:mm:ss").format(new Date()));
                     logWriter.close();
                 } catch (IOException e) {
@@ -584,18 +687,23 @@ public class TN3270Demo {
 
     public static void main(String[] args) {
         System.out.println("\n==============================================================");
-        System.out.println("TK4- MVS TSO 自动化程序 (修正版)");
+        System.out.println("TK4- MVS TSO 自动化程序 (可配置版)");
         System.out.println("==============================================================\n");
 
-        boolean debugMode = true;
+        // ⭐⭐⭐ 配置参数 ⭐⭐⭐
+        boolean debugMode = true;                // 是否开启调试
+        boolean onlyShowScreenChanges = true;   // true=只显示变化, false=显示所有
 
-        System.out.println("调试模式: " + (debugMode ? "开启" : "关闭"));
-        System.out.println("密码字段: 使用固定位置 (1,24)");
+        System.out.println("配置:");
+        System.out.println("  调试模式: " + (debugMode ? "开启" : "关闭"));
+        System.out.println("  屏幕显示: " + (onlyShowScreenChanges ? "仅显示变化" : "显示所有"));
         System.out.println();
 
-        TN3270Demo demo = new TN3270Demo(debugMode);
+        TN3270Demo demo = new TN3270Demo(debugMode, onlyShowScreenChanges);
 
         try {
+            // 1. 连接
+            System.out.println("步骤1: 连接到TK4-...\n");
             if (!demo.connect()) {
                 System.err.println("\n❌ 连接失败");
                 return;
@@ -603,21 +711,33 @@ public class TN3270Demo {
 
             System.out.println("\n✓ 连接成功!");
 
+            // 2. 登录
+            System.out.println("\n步骤2: 自动登录...\n");
             if (!demo.autoLogin("HERC01", "CUL8TR")) {
                 System.err.println("\n❌ 登录失败");
                 return;
             }
 
             System.out.println("\n✓ 登录成功!");
-            System.out.println("\n程序将在30秒后自动登出...");
 
-            for (int i = 30; i > 0; i--) {
+            // 3. 执行TSO操作
+            System.out.println("\n步骤3: 执行TSO操作...\n");
+            demo.performTSOOperations();
+
+            System.out.println("\n✓ TSO操作完成!");
+
+            // 4. 等待一下
+            System.out.println("\n程序将在10秒后自动登出...");
+            for (int i = 10; i > 0; i--) {
                 System.out.print("\r剩余 " + i + " 秒... ");
                 Thread.sleep(1000);
             }
             System.out.println();
 
+            // 5. 登出
+            System.out.println("\n步骤4: 自动登出...\n");
             demo.logout();
+
             System.out.println("\n✓ 登出成功!");
 
         } catch (Exception e) {
