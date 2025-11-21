@@ -1,0 +1,9 @@
+D:\Program_Files\jdks\corretto-21.0.9\bin\java.exe -javaagent:D:\ideaIU-2024.3.win\lib\idea_rt.jar=4250:D:\ideaIU-2024.3.win\bin -Dfile.encoding=UTF-8 -Dsun.stdout.encoding=UTF-8 -Dsun.stderr.encoding=UTF-8 -classpath E:\03_src\004_Tk4Test\out\production\004_Tk4Test;E:\03_src\004_Tk4Test\libs\java-tn3270-5.2.23.3.18-x86_64.jar Tk4Test
+终端已创建
+发生错误：
+java.lang.Exception: ϵͳÊÔͼ½«Çý¶¯Æ÷ºϲ¢µ½ºϲ¢Ç
+    at br.app.pw3270.Terminal.connect(Native Method)
+    at Tk4Test.main(Tk4Test.java:18)
+java.lang.Exception: Disconnected from host
+    at br.app.pw3270.Terminal.disconnect(Native Method)
+    at Tk4Test.main(Tk4Test.java:62)
